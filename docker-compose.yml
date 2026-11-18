@@ -1,0 +1,206 @@
+# Middleware HA Lab — a production-shaped, local middleware stack.
+# Maps 1:1 to the middleware described in the resume:
+#   Nginx + Keepalived (HA) | MySQL master/replica | Redis | RabbitMQ 3-node | exporters | monitoring
+# Run: docker compose up -d
+name: middleware-ha-lab
+
+services:
+  # ---------- Web tier: Nginx + Keepalived (VIP 172.20.0.100) ----------
+  nginx-01:
+    image: nginx:1.27-alpine
+    container_name: mh-nginx-01
+    volumes:
+      - ./middleware/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./middleware/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./middleware/nginx/html:/usr/share/nginx/html:ro
+      - ./middleware/keepalived/check_nginx.sh:/etc/keepalived/check_nginx.sh:ro
+    cap_add: [NET_ADMIN, NET_RAW]           # required for VRRP
+    network_mode: host                       # host mode so keepalived can own a VIP on the LAN
+    depends_on: [mysql-master, redis, rabbitmq-01]
+
+  nginx-02:
+    image: nginx:1.27-alpine
+    container_name: mh-nginx-02
+    volumes:
+      - ./middleware/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./middleware/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./middleware/nginx/html:/usr/share/nginx/html:ro
+    ports: ["8081:80"]
+
+  # Keepalived sidecars (separate containers sharing nginx network namespace)
+  keepalived-01:
+    image: osixia/keepalived:2.0.20
+    container_name: mh-keepalived-01
+    network_mode: "service:nginx-01"
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      - KEEPALIVED_INTERFACE=eth0
+      - KEEPALIVED_VIRTUAL_IPS=172.20.0.100   # replace with a free IP on your network
+      - KEEPALIVED_UNICAST_PEERS=#PYTHON2BASH:['172.20.0.12']
+      - KEEPALIVED_PRIORITY=150               # master
+      - KEEPALIVED_PASSWORD=showcase_vrrp
+    volumes:
+      - ./middleware/keepalived/keepalived.conf:/etc/keepalived/keepalived.conf:ro
+      - ./middleware/keepalived/check_nginx.sh:/usr/local/bin/check_nginx.sh:ro
+    depends_on: [nginx-01]
+
+  keepalived-02:
+    image: osixia/keepalived:2.0.20
+    container_name: mh-keepalived-02
+    network_mode: "service:nginx-02"
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      - KEEPALIVED_INTERFACE=eth0
+      - KEEPALIVED_VIRTUAL_IPS=172.20.0.100
+      - KEEPALIVED_PRIORITY=100               # backup
+      - KEEPALIVED_PASSWORD=showcase_vrrp
+    volumes:
+      - ./middleware/keepalived/keepalived.conf:/etc/keepalived/keepalived.conf:ro
+    depends_on: [nginx-02]
+
+  # ---------- Data tier: MySQL master + replica ----------
+  mysql-master:
+    image: mysql:8.0
+    container_name: mh-mysql-master
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass           # demo only; override via .env in real use
+      MYSQL_DATABASE: iot
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppass
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --gtid-mode=ON --enforce-gtid-consistency=ON
+    volumes:
+      - ./middleware/mysql/master-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - mysql-master-data:/var/lib/mysql
+    ports: ["3306:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpass"]
+      interval: 10s
+      retries: 10
+
+  mysql-replica:
+    image: mysql:8.0
+    container_name: mh-mysql-replica
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+    command: >
+      --server-id=2
+      --relay-log=relay-bin
+      --gtid-mode=ON --enforce-gtid-consistency=ON
+      --read-only=ON
+    volumes:
+      - ./middleware/mysql/replica-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - mysql-replica-data:/var/lib/mysql
+    ports: ["3307:3306"]
+    depends_on: [mysql-master]
+
+  # ---------- Cache: Redis ----------
+  redis:
+    image: redis:7-alpine
+    container_name: mh-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./middleware/redis/redis.conf:/etc/redis/redis.conf:ro
+      - redis-data:/data
+    ports: ["6379:6379"]
+
+  # ---------- MQ: RabbitMQ 3-node quorum cluster ----------
+  rabbitmq-01:
+    image: rabbitmq:3.13-management-alpine
+    container_name: mh-rabbitmq-01
+    hostname: rabbit-01
+    environment:
+      RABBITMQ_ERLANG_COOKIE: showcase_cookie
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbit-01-data:/var/lib/rabbitmq]
+
+  rabbitmq-02:
+    image: rabbitmq:3.13-management-alpine
+    container_name: mh-rabbitmq-02
+    hostname: rabbit-02
+    environment:
+      RABBITMQ_ERLANG_COOKIE: showcase_cookie
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    volumes: [rabbit-02-data:/var/lib/rabbitmq]
+    depends_on: [rabbitmq-01]
+
+  rabbitmq-03:
+    image: rabbitmq:3.13-management-alpine
+    container_name: mh-rabbitmq-03
+    hostname: rabbit-03
+    environment:
+      RABBITMQ_ERLANG_COOKIE: showcase_cookie
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    volumes: [rabbit-03-data:/var/lib/rabbitmq]
+    depends_on: [rabbitmq-01]
+
+  # ---------- Exporters: feed Prometheus ----------
+  mysql-exporter:
+    image: prom/mysqld-exporter:v0.16.0
+    container_name: mh-mysql-exporter
+    command: ["--config.my-cnf=/etc/mysql-exporter.cnf"]
+    volumes: [./middleware/exporters/mysql-exporter.cnf:/etc/mysql-exporter.cnf:ro]
+    ports: ["9104:9104"]
+    depends_on: [mysql-master]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.61.0
+    container_name: mh-redis-exporter
+    environment: { REDIS_ADDR: "redis://redis:6379" }
+    ports: ["9121:9121"]
+    depends_on: [redis]
+
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter:v1.0.0.M1
+    container_name: mh-rabbitmq-exporter
+    environment:
+      RABBIT_URL: "http://rabbitmq-01:15672"
+      RABBIT_USER: admin
+      RABBIT_PASSWORD: admin
+    ports: ["9419:9419"]
+    depends_on: [rabbitmq-01]
+
+  nginx-exporter:
+    image: nginxinc/nginx-prometheus-exporter:1.1.0
+    container_name: mh-nginx-exporter
+    command: ["-nginx.scrape-uri=http://nginx-02:80/stub_status"]
+    ports: ["9113:9113"]
+    depends_on: [nginx-02]
+
+  # ---------- Monitoring ----------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mh-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prom-data:/prometheus
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: mh-grafana
+    environment: { GF_SECURITY_ADMIN_PASSWORD: admin }
+    volumes:
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - graf-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+volumes:
+  mysql-master-data:
+  mysql-replica-data:
+  redis-data:
+  rabbit-01-data:
+  rabbit-02-data:
+  rabbit-03-data:
+  prom-data:
+  graf-data:

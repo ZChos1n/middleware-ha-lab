@@ -1,0 +1,5 @@
+[client]
+user = root
+password = rootpass
+host = mysql-master
+port = 3306

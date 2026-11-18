@@ -1,0 +1,63 @@
+# Middleware alert rules — mirrors the "50+ indicators / 7x24 alerting" in the resume.
+groups:
+  - name: middleware-availability
+    rules:
+      - alert: MiddlewareDown
+        expr: up{job=~"nginx|mysql|redis|rabbitmq"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} exporter is down"
+          runbook_url: "https://github.com/ZChos1n/middleware-ha-lab/blob/main/docs/RUNBOOK.md"
+
+      - alert: High5xxRate
+        expr: |
+          sum(rate(nginx_connections_failed[5m])) > 5
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Nginx 5xx / failed connections elevated"
+
+  - name: mysql
+    rules:
+      - alert: MySQLSlowQueries
+        expr: rate(mysql_global_status_slow_queries[5m]) > 1
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "MySQL slow queries rising — check missing indexes (see 504 incident)"
+
+      - alert: MySQLReplicationLag
+        expr: mysql_slave_status_seconds_behind_master > 30
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "MySQL replica lag > 30s"
+
+      - alert: MySQLConnectionsHigh
+        expr: |
+          mysql_global_status_threads_connected
+          / mysql_global_variables_max_connections > 0.8
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "MySQL connection pool > 80%"
+
+  - name: redis
+    rules:
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_config_maxmemory > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis memory > 90% — check eviction policy"
+          runbook_url: "https://github.com/ZChos1n/middleware-ha-lab/blob/main/middleware/redis/redis.conf"
+
+  - name: rabbitmq
+    rules:
+      - alert: RabbitMQQueueBacklog
+        expr: rabbitmq_queue_messages_ready > 1000
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "RabbitMQ queue backlog growing — consumers may be stuck"

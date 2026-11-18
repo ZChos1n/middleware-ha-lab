@@ -1,0 +1,49 @@
+{
+  "uid": "middleware-ha",
+  "title": "Middleware HA — Overview",
+  "tags": ["middleware", "nginx", "mysql", "redis", "rabbitmq"],
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Up components",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(up{job=~\"nginx|mysql|redis|rabbitmq\"})", "legendFormat": "up" }],
+      "fieldConfig": { "defaults": { "unit": "short", "max": 4 }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Nginx connections",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "nginx_connections_active", "legendFormat": "active" },
+        { "expr": "nginx_connections_accepted", "legendFormat": "accepted" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "MySQL queries per second",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [{ "expr": "rate(mysql_global_status_queries[1m])", "legendFormat": "qps" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "MySQL replication lag",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "mysql_slave_status_seconds_behind_master", "legendFormat": "lag" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Redis memory usage",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "redis_memory_used_bytes", "legendFormat": "used" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "RabbitMQ ready messages",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "sum(rabbitmq_queue_messages_ready)", "legendFormat": "ready" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    }
+  ]
+}

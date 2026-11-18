@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Lab-generated artifacts (data/logs are large and machine-specific)
+troubleshooting/504-incident/*.db
+*.log
+# Keep the sample access log used by the demo/tests
+!troubleshooting/504-incident/sample_access.log
+
+# Secrets & local overrides
+.env
+*.tfstate
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
